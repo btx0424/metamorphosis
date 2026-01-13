@@ -1,91 +1,31 @@
 import mujoco
-import mujoco.viewer
-import itertools
 import numpy as np
 import random
 
-from pxr import Usd, UsdGeom, UsdPhysics, Sdf, Gf
-from typing import NamedTuple
-try:
-    from pxr import PhysxSchema
-except ImportError:
-    PhysxSchema = None
-from scipy.spatial.transform import Rotation as R
-from typing import Optional
+from pxr import Usd, UsdGeom, UsdPhysics, Gf
+from typing import NamedTuple, Optional
+from .usd_utils import (
+    add_default_transform_,
+    create_capsule,
+    create_revolute_joint,
+    create_fixed_joint,
+)
 
 
-def add_default_transform_(prim: Usd.Prim):
-    vec3_dtype, vec3_cls = Sdf.ValueTypeNames.Float3, Gf.Vec3f
-    quat_dtype, quat_cls = Sdf.ValueTypeNames.Quatf, Gf.Quatf
-    order = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
-    # add xform ops [scale, orient, translate]
-    prim.CreateAttribute("xformOp:scale", vec3_dtype, False).Set(vec3_cls(1.0, 1.0, 1.0))
-    prim.CreateAttribute("xformOp:orient", quat_dtype, False).Set(quat_cls(1.0, 0.0, 0.0, 0.0))
-    prim.CreateAttribute("xformOp:translate", vec3_dtype, False).Set(vec3_cls(0.0, 0.0, 0.0))
-    prim.CreateAttribute("xformOpOrder", Sdf.ValueTypeNames.TokenArray, False).Set(order)
-
-
-def create_capsule(stage: Usd.Stage, path: str, radius: float, fromto: np.ndarray):
-    capsule = UsdGeom.Capsule.Define(stage, path)
-    add_default_transform_(capsule.GetPrim())
-    direction = fromto[3:] - fromto[:3]
-    length = np.linalg.norm(direction)
-    direction = direction / length
-    axis = np.cross(direction, [0, 0, 1])
-    angle = np.arccos(np.dot(direction, [0, 0, 1]))
-    translation = (fromto[:3] + fromto[3:]) / 2
-    orient = R.from_rotvec(angle * axis).as_quat(scalar_first=True)
-    capsule.CreateAxisAttr("Z")
-    capsule.CreateRadiusAttr(radius)
-    capsule.CreateHeightAttr(length)
-    capsule.GetPrim().GetAttribute("xformOp:translate").Set(Gf.Vec3f(*translation))
-    capsule.GetPrim().GetAttribute("xformOp:orient").Set(Gf.Quatf(*orient))
-    return capsule
-
-
-def create_fixed_joint(stage: Usd.Stage, path: str, body_0: Usd.Prim, body_1: Usd.Prim):
-    joint = UsdPhysics.FixedJoint.Define(stage, path)
-    joint.CreateBody0Rel().SetTargets([body_0.GetPath()])
-    joint.CreateBody1Rel().SetTargets([body_1.GetPath()])
-    xfCache = UsdGeom.XformCache()
-    body_0_pose = xfCache.GetLocalToWorldTransform(body_0)
-    body_1_pose = xfCache.GetLocalToWorldTransform(body_1)
-    rel_pose = body_1_pose * body_0_pose.GetInverse()
-    rel_pose = rel_pose.RemoveScaleShear()
-    pos1 = Gf.Vec3f(rel_pose.ExtractTranslation())
-    rot1 = Gf.Quatf(rel_pose.ExtractRotationQuat())
-    joint.CreateLocalPos0Attr().Set(pos1)
-    joint.CreateLocalRot0Attr().Set(rot1)
-    return joint
-
-
-def create_revolute_joint(stage: Usd.Stage, path: str, body_0: Usd.Prim, body_1: Usd.Prim, axis: str = "Z"):
-    assert axis in ["X", "Y", "Z"], f"Invalid axis: {axis}"
-    joint = UsdPhysics.RevoluteJoint.Define(stage, path)
-    joint.CreateBody0Rel().SetTargets([body_0.GetPath()])
-    joint.CreateBody1Rel().SetTargets([body_1.GetPath()])
-    joint.CreateAxisAttr(axis)
-    xfCache = UsdGeom.XformCache()
-    body_0_pose = xfCache.GetLocalToWorldTransform(body_0)
-    body_1_pose = xfCache.GetLocalToWorldTransform(body_1)
-    rel_pose = body_1_pose * body_0_pose.GetInverse()
-    rel_pose = rel_pose.RemoveScaleShear()
-    pos1 = Gf.Vec3f(rel_pose.ExtractTranslation())
-    rot1 = Gf.Quatf(rel_pose.ExtractRotationQuat())
-    joint.CreateLocalPos0Attr().Set(pos1)
-    joint.CreateLocalRot0Attr().Set(rot1)
-
-    prim = joint.GetPrim()
-    # check if prim has joint drive applied on it
-    usd_drive_api = UsdPhysics.DriveAPI(prim, "angular")
-    if not usd_drive_api:
-        usd_drive_api = UsdPhysics.DriveAPI.Apply(prim, "angular")
-    # check if prim has Physx joint drive applied on it
-    if PhysxSchema is not None:
-        physx_joint_api = PhysxSchema.PhysxJointAPI(prim)
-        if not physx_joint_api:
-            physx_joint_api = PhysxSchema.PhysxJointAPI.Apply(prim)
-    return joint
+def add_leg_(
+    parent_body: mujoco.MjsBody,
+    name: str,
+    pos: list[float],
+    radius: float,
+    length: float,
+):
+    body = parent_body.add_body(name=name, pos=pos)
+    body.mass = 1.0
+    body.inertia = [1.0, 1.0, 1.0]
+    geom = body.add_geom(type=mujoco.mjtGeom.mjGEOM_CAPSULE)
+    geom.size = [radius, 0, 0.]
+    geom.fromto = [0, 0, 0, 0, 0, -length]
+    return body
 
 
 class QuadrupedParams(NamedTuple):
@@ -123,13 +63,14 @@ class QuadrupedBuilder:
             has_hock_joint=[]
         )
 
-    def spawn(self, prim_path: str, seed: int=0, stage: Optional[Usd.Stage] = None):
+    def spawn(self, prim_path: str, seed: int=-1, stage: Optional[Usd.Stage] = None):
         if stage is None:
             stage = self.stage
         assert stage is not None
 
-        np.random.seed(seed)
-        random.seed(seed)
+        if seed >= 0:
+            np.random.seed(seed)
+            random.seed(seed)
 
         BODY_LENGTH = random.uniform(0.5, 1.0)
         BODY_WIDTH = random.uniform(0.3, 0.4)
@@ -176,7 +117,6 @@ class QuadrupedBuilder:
             joint.range = [-np.pi * 0.9, np.pi * 0.9]
             geom = upper_thigh_body.add_geom(type=mujoco.mjtGeom.mjGEOM_CAPSULE)
             
-
             if hock_joint:
                 UPPER_THIGH_LENGTH = leg_length * 0.6
                 LOWER_THIGH_LENGTH = leg_length * 0.6
@@ -185,16 +125,16 @@ class QuadrupedBuilder:
                 geom.size = [thigh_radius * 1.3, 0, 0.]
                 geom.fromto = [0, 0, 0, 0, 0, -UPPER_THIGH_LENGTH]
                 
-                lower_thigh_body = upper_thigh_body.add_body(pos=[0, 0, -UPPER_THIGH_LENGTH])
-                lower_thigh_body.name = f"{name}_lower_thigh"
-                lower_thigh_body.mass = 1.0
-                lower_thigh_body.inertia = [1.0, 1.0, 1.0]
+                lower_thigh_body = add_leg_(
+                    upper_thigh_body,
+                    name=f"{name}_lower_thigh",
+                    pos=[0, 0, -UPPER_THIGH_LENGTH],
+                    radius=thigh_radius,
+                    length=LOWER_THIGH_LENGTH
+                )
                 joint = lower_thigh_body.add_joint(type=mujoco.mjtJoint.mjJNT_HINGE, axis=[0, 1, 0])
                 joint.name = f"{name}_hock_joint"
                 joint.range = [-np.pi * 0.8, np.pi * 0.8]
-                geom = lower_thigh_body.add_geom(type=mujoco.mjtGeom.mjGEOM_CAPSULE)
-                geom.size = [thigh_radius, 0, 0.]
-                geom.fromto = [0, 0, 0, 0, 0, -LOWER_THIGH_LENGTH]
             else:
                 UPPER_THIGH_LENGTH = 0
                 LOWER_THIGH_LENGTH = leg_length
@@ -203,24 +143,26 @@ class QuadrupedBuilder:
                 geom.size = [thigh_radius * 1.3, 0, 0.]
                 geom.fromto = [0, 0, 0.1, 0, 0, -0.1]
 
-                lower_thigh_body = upper_thigh_body.add_body(name=f"{name}_lower_thigh")
-                lower_thigh_body.mass = 1.0
-                lower_thigh_body.inertia = [1.0, 1.0, 1.0]
+                lower_thigh_body = add_leg_(
+                    upper_thigh_body,
+                    name=f"{name}_lower_thigh",
+                    pos=[0, 0, 0],
+                    radius=thigh_radius,
+                    length=LOWER_THIGH_LENGTH
+                )
                 joint = lower_thigh_body.add_joint(type=mujoco.mjtJoint.mjJNT_HINGE, axis=[0, 0, 1])
                 joint.name = f"{name}_hock_joint"
                 joint.range = [-np.pi * 0.3, np.pi * 0.3]
-                geom = lower_thigh_body.add_geom(type=mujoco.mjtGeom.mjGEOM_CAPSULE)
-                geom.size = [thigh_radius, 0, 0.]
-                geom.fromto = [0, 0, 0, 0, 0, -LOWER_THIGH_LENGTH]
 
-            calf_body = lower_thigh_body.add_body(name=f"{name}_calf", pos=[0, 0, -LOWER_THIGH_LENGTH])
-            calf_body.mass = 1.0
-            calf_body.inertia = [1.0, 1.0, 1.0]
+            calf_body = add_leg_(
+                lower_thigh_body,
+                name=f"{name}_calf",
+                pos=[0, 0, -LOWER_THIGH_LENGTH],
+                radius=calf_radius,
+                length=CALF_LENGTH
+            )
             joint = calf_body.add_joint(name=f"{name}_calf_joint", type=mujoco.mjtJoint.mjJNT_HINGE, axis=[0, 1, 0])
             joint.range = [-np.pi, 0]
-            geom = calf_body.add_geom(type=mujoco.mjtGeom.mjGEOM_CAPSULE)
-            geom.size = [calf_radius, 0, 0.]
-            geom.fromto = [0, 0, 0, 0, 0, -CALF_LENGTH]
 
             feet_body = calf_body.add_body(name=f"{name}_foot", pos=[0, 0, -CALF_LENGTH])
             feet_body.mass = 1.0

@@ -31,7 +31,14 @@ def design_scene():
     )
     cfg_light_distant.func("/World/lightDistant", cfg_light_distant, translation=(1, 0, 10))
     
-    cfg_procedural_quadruped = ProceduralQuadrupedCfg()
+    cfg_procedural_quadruped = ProceduralQuadrupedCfg(
+        articulation_props=sim_utils.ArticulationRootPropertiesCfg(
+            enabled_self_collisions=False,
+            solver_position_iteration_count=4,
+            solver_velocity_iteration_count=1,
+        ),
+        hock_joint_prob=0.0,
+    )
     cfg_procedural_quadruped.func("/World/Robot", cfg_procedural_quadruped, translation=(0, 0, 1.0))
 
 

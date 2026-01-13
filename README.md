@@ -4,9 +4,9 @@ A minimalist implementation of morphology randomization in Isaac Sim. Can be use
 
 ## TODO:
 
-[x] Preliminary implementation.
-[ ] `QuadrupedBuilder12Dof` and `QuadrupedBuilder16Dof`.
-[ ] A minimal RL baseline.  
+- [x] Preliminary implementation.
+- [ ] `QuadrupedBuilder12Dof` and `QuadrupedBuilder16Dof`.
+- [ ] A minimal RL baseline.  
 
 ## Instaillation
 
