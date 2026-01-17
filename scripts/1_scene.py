@@ -20,12 +20,14 @@ simulation_app = app_launcher.app
 import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg
 from isaaclab.actuators import ImplicitActuatorCfg
+from isaaclab.sensors import ContactSensorCfg, ContactSensor
 from isaaclab.scene import InteractiveScene, InteractiveSceneCfg
 from metamorphosis.asset_cfg import ProceduralQuadrupedCfg, QuadrupedBuilder
 
 
 QUADRUPED_CONFIG = ArticulationCfg(
     spawn=ProceduralQuadrupedCfg(
+        activate_contact_sensors=True,
         articulation_props=sim_utils.ArticulationRootPropertiesCfg(
             enabled_self_collisions=False,
             solver_position_iteration_count=4,
@@ -71,6 +73,11 @@ class ProceduralQuadrupedSceneCfg(InteractiveSceneCfg):
     """Designs the scene."""
     # jetbot = JETBOT_CONFIG.replace(prim_path="{ENV_REGEX_NS}/Jetbot")
     quadruped = QUADRUPED_CONFIG.replace(prim_path="{ENV_REGEX_NS}/Quadruped")
+    contact_sensor = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Quadruped/.*",
+        track_air_time=True,
+        history_length=3,
+    )
 
 
 def main():
@@ -91,8 +98,10 @@ def main():
     # Play the simulator
     sim.reset()
     scene.reset()
-    articulation = scene.articulations["quadruped"]
     
+    articulation = scene.articulations["quadruped"]
+    contact_sensor: ContactSensor = scene.sensors["contact_sensor"]
+
     print(articulation.joint_names)
     print(articulation.body_names)
     # print(articulation.data.default_mass)
@@ -119,6 +128,7 @@ def main():
         scene.write_data_to_sim()
         sim.step()
         scene.update(sim.get_physics_dt())
+        print(contact_sensor.data.net_forces_w)
 
 
 if __name__ == "__main__":

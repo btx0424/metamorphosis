@@ -31,6 +31,8 @@ def spawn(
         param = builder.sample_params(seed=i)
         prim = builder.spawn(stage, prim_path, param)
         schemas.modify_articulation_root_properties(prim_path, cfg.articulation_props)
+        if cfg.activate_contact_sensors:
+            schemas.activate_contact_sensors(prim_path, stage=stage)
     return prim
 
 
@@ -40,6 +42,9 @@ class ProceduralQuadrupedCfg(SpawnerCfg):
 
     func: Callable = spawn
     """Function to use for spawning the asset."""
+
+    activate_contact_sensors: bool = True
+    """Whether to activate contact sensors for the asset. Defaults to True."""
 
     articulation_props: schemas.ArticulationRootPropertiesCfg | None = None
 
