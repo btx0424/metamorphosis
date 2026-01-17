@@ -37,7 +37,11 @@ def design_scene():
             solver_position_iteration_count=4,
             solver_velocity_iteration_count=1,
         ),
-        hock_joint_prob=0.0,
+        base_length_range=(0.5, 1.0),
+        base_width_range=(0.3, 0.4),
+        base_height_range=(0.15, 0.25),
+        leg_length_range=(0.4, 0.8),
+        calf_length_ratio=(0.9, 1.0),
     )
     cfg_procedural_quadruped.func("/World/Robot", cfg_procedural_quadruped, translation=(0, 0, 1.0))
 

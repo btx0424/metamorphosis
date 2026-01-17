@@ -16,7 +16,24 @@ Git clone and `pip install -e .`.
 
 See `scripts/`.
 
+Note that running independently (without IsaacLab) would require installing Open-USD via `pip install usd-core`.
+However, IsaacSim uses a custom USD build and is **incompatible** with the one installed via pip.
+If you experience IsaacSim errors after `pip install usd-core`, uninstall it.
+
+
 **Important**
 
 Remember to set `replicate_physics=False` and `enabled_self_collisions=False`!
+
+## Citation
+If you use this codebase in your research, please cite:
+
+```
+@misc{metamorphosis2026,
+  title={Metamorphosis: A Framework for Procedural Asset Generation in Isaac Sim},
+  author={Botian Xu},
+  year={2026},
+  url={https://github.com/btx0424/metamorphosis}
+}
+```
 

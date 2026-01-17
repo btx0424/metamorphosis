@@ -31,15 +31,17 @@ QUADRUPED_CONFIG = ArticulationCfg(
             solver_position_iteration_count=4,
             solver_velocity_iteration_count=1,
         ),
-        hock_joint_prob=0.5,
+        base_length_range=(0.5, 1.0),
+        base_width_range=(0.3, 0.4),
+        base_height_range=(0.15, 0.25),
+        leg_length_range=(0.4, 0.8),
+        calf_length_ratio=(0.9, 1.0),
     ),
     init_state=ArticulationCfg.InitialStateCfg(
         joint_pos={
             ".*_hip_joint": 0.0,
-            "[L,R]F_hock_joint": 0.0,
-            "[L,R]F_thigh_joint": np.pi  / 4,
-            "[L,R]H_thigh_joint": 0.0,
-            "[L,R]H_hock_joint": 0.0,
+            "F[L,R]_thigh_joint": np.pi / 4,
+            "R[L,R]_thigh_joint": np.pi / 4,
             ".*_calf_joint": -np.pi  / 2,
         },
         pos=(0, 0, 1.0),
@@ -96,18 +98,13 @@ def main():
     # print(articulation.data.default_mass)
     print(articulation.root_physx_view.is_homogeneous)
     
-    builder = QuadrupedBuilder._instance
-    has_hock_joint = torch.tensor(builder.params.has_hock_joint, device=articulation.device)
-    print(has_hock_joint)
-
-    hind_hock_joint_ids = articulation.find_joints("[L,R]H_hock_joint")[0]
-    hind_thigh_joint_ids = articulation.find_joints("[L,R]H_thigh_joint")[0]
-    default_joint_pos = articulation.data.default_joint_pos.clone()
-    default_joint_pos[:, hind_thigh_joint_ids] = torch.where(has_hock_joint.unsqueeze(1), - np.pi * 0.2, np.pi / 4)
-    default_joint_pos[:, hind_hock_joint_ids] = torch.where(has_hock_joint.unsqueeze(1), np.pi * 0.6, 0)
+    builder = QuadrupedBuilder.get_instance()
+    print(builder.params)
 
     root_state = articulation.data.default_root_state.clone()
     root_state[:, :3] += scene.env_origins
+    default_joint_pos = articulation.data.default_joint_pos.clone()
+
     articulation.root_physx_view.set_masses(articulation.data.default_mass.sqrt(), torch.arange(articulation.num_instances))
     articulation.write_root_pose_to_sim(root_state[:, :7])
     articulation.write_joint_position_to_sim(default_joint_pos)

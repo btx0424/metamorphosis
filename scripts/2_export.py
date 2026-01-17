@@ -1,5 +1,6 @@
-from metamorphosis.quadruped import QuadrupedBuilder
+from metamorphosis.builder import QuadrupedBuilder
 from pxr import Usd, UsdGeom, UsdPhysics, Sdf, Gf
+
 
 def make_stage(path="quadruped.usda", meters=1.0, up="Z"):
     stage = Usd.Stage.CreateNew(path)
@@ -11,8 +12,11 @@ def make_stage(path="quadruped.usda", meters=1.0, up="Z"):
     phys_scene.CreateGravityMagnitudeAttr().Set(9.81 if meters == 1.0 else 981.0)
     return stage
 
+
 stage = make_stage()
-builder = QuadrupedBuilder(hock_joint=True, stage=stage)
-prim = builder.spawn(prim_path="/Robot", seed=0)
+builder = QuadrupedBuilder()
+param = builder.sample_params(seed=0)
+prim = builder.spawn(stage, prim_path="/Robot", param=param)
 stage.SetDefaultPrim(prim)
 stage.GetRootLayer().Save()
+

@@ -1,7 +1,11 @@
+import numpy as np
+import mujoco
+
 from pxr import Usd, UsdGeom, UsdPhysics, Sdf, Gf
 from scipy.spatial.transform import Rotation as R
-import numpy as np
+
 try:
+    # only available in Isaac Sim's custom USD build
     from pxr import PhysxSchema
 except ImportError:
     PhysxSchema = None
@@ -79,3 +83,61 @@ def create_revolute_joint(stage: Usd.Stage, path: str, body_0: Usd.Prim, body_1:
         if not physx_joint_api:
             physx_joint_api = PhysxSchema.PhysxJointAPI.Apply(prim)
     return joint
+
+
+def from_mjspec(stage: Usd.Stage, prim_path: str, spec: mujoco.MjSpec) -> Usd.Prim:
+        mjmodel = spec.compile()
+        mjdata = mujoco.MjData(mjmodel)
+        mujoco.mj_forward(mjmodel, mjdata)
+
+        root_prim = UsdGeom.Xform.Define(stage, prim_path).GetPrim()
+        # stage.SetDefaultPrim(root_prim)
+        UsdPhysics.ArticulationRootAPI.Apply(root_prim)
+
+        prim_dict = {}
+        for mjbody in spec.worldbody.find_all("body"):
+            xform = UsdGeom.Xform.Define(stage, f"{prim_path}/{mjbody.name}")
+            xform_prim = xform.GetPrim()
+            for i, geom in enumerate(mjbody.geoms):
+                geom_path = f"{xform.GetPath()}/collision_{i}"
+                match geom.type:
+                    case mujoco.mjtGeom.mjGEOM_BOX:
+                        cube = UsdGeom.Cube.Define(stage, geom_path)
+                        cube.CreateSizeAttr(2.0)
+                        add_default_transform_(cube.GetPrim())
+                        cube.GetPrim().GetAttribute("xformOp:scale").Set(Gf.Vec3f(geom.size[0], geom.size[1], geom.size[2]))
+                    case mujoco.mjtGeom.mjGEOM_CAPSULE:
+                        capsule = create_capsule(stage, geom_path, geom.size[0], np.array(geom.fromto))
+                    case mujoco.mjtGeom.mjGEOM_SPHERE:
+                        sphere = UsdGeom.Sphere.Define(stage, geom_path)
+                        add_default_transform_(sphere.GetPrim())
+                        sphere.CreateRadiusAttr(geom.size[0])
+                    case _:
+                        raise ValueError(f"Unsupported geometry type: {geom.type}")
+            add_default_transform_(xform_prim)
+            xform_prim.GetAttribute("xformOp:translate").Set(Gf.Vec3f(*mjdata.xpos[mjbody.id]))
+            xform_prim.GetAttribute("xformOp:orient").Set(Gf.Quatf(*mjdata.xquat[mjbody.id]))
+            UsdPhysics.CollisionAPI.Apply(xform_prim)
+            UsdPhysics.RigidBodyAPI.Apply(xform_prim)
+
+            prim_dict[mjbody.id] = xform_prim
+            joints = mjbody.joints
+            if mjbody.parent.id > 0:
+                parent_prim = prim_dict[mjbody.parent.id]
+                if len(joints):
+                    assert len(joints) == 1, "Only one joint is supported."
+                    joint = joints[0]
+                    joint_path = f"{parent_prim.GetPath()}/{joint.name}"
+                    joint_range = joint.range / np.pi * 180
+                    match joint.type:
+                        case mujoco.mjtJoint.mjJNT_HINGE:
+                            axis = ["X", "Y", "Z"][np.argmax(np.abs(joint.axis))]
+                            joint = create_revolute_joint(stage, joint_path, parent_prim, xform_prim, axis)
+                            joint.CreateLowerLimitAttr(joint_range[0])
+                            joint.CreateUpperLimitAttr(joint_range[1])
+                        case _:
+                            raise ValueError(f"Unsupported joint type: {joint.type}")
+                else:
+                    joint_path = f"{parent_prim.GetPath()}/{mjbody.name}_joint"
+                    create_fixed_joint(stage, joint_path, parent_prim, xform_prim)
+        return root_prim
