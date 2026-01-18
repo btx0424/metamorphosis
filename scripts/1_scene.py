@@ -1,6 +1,7 @@
 import argparse
 import numpy as np
 import torch
+import itertools
 
 from isaaclab.app import AppLauncher
 
@@ -42,9 +43,10 @@ QUADRUPED_CONFIG = ArticulationCfg(
     init_state=ArticulationCfg.InitialStateCfg(
         joint_pos={
             ".*_hip_joint": 0.0,
-            "F[L,R]_thigh_joint": np.pi / 4,
-            "R[L,R]_thigh_joint": np.pi / 4,
-            ".*_calf_joint": -np.pi  / 2,
+            "F[L,R]_thigh_joint": torch.pi / 4,
+            "R[L,R]_thigh_joint": 0.0, # depends on the parallel_abduction flag
+            "F[L,R]_calf_joint": -torch.pi  / 2,
+            "R[L,R]_calf_joint": 0.0, # depends on the parallel_abduction flag
         },
         pos=(0, 0, 1.0),
     ),
@@ -108,27 +110,64 @@ def main():
     print(articulation.root_physx_view.is_homogeneous)
     
     builder = QuadrupedBuilder.get_instance()
-    print(builder.params)
+    
+    # # modify the following based on the parallel_abduction flag
+    # # 1. default_joint_pos
+    # # 2. joint_limits
+    parallel_abduction = torch.tensor(
+        [p.parallel_abduction for p in builder.params],
+        device=scene.device,
+    )
+    front_thigh_joint_ids = articulation.find_joints("F[L,R]_thigh_joint")[0]
+    front_calf_joint_ids = articulation.find_joints("F[L,R]_calf_joint")[0]
+    rear_thigh_joint_ids = articulation.find_joints("R[L,R]_thigh_joint")[0]
+    rear_calf_joint_ids = articulation.find_joints("R[L,R]_calf_joint")[0]
 
-    root_state = articulation.data.default_root_state.clone()
-    root_state[:, :3] += scene.env_origins
     default_joint_pos = articulation.data.default_joint_pos.clone()
+    default_joint_pos[:, rear_thigh_joint_ids] = torch.where(
+        parallel_abduction.reshape(articulation.num_instances, 1),
+        default_joint_pos[:, front_thigh_joint_ids],
+        -default_joint_pos[:, front_thigh_joint_ids],
+    )
+    default_joint_pos[:, rear_calf_joint_ids] = torch.where(
+        parallel_abduction.reshape(articulation.num_instances, 1),
+        default_joint_pos[:, front_calf_joint_ids],
+        -default_joint_pos[:, front_calf_joint_ids],
+    )
+    articulation.data.default_joint_pos[:] = default_joint_pos
 
+    joint_pos_limits = articulation.data.joint_pos_limits.clone()
+    joint_pos_limits[:, front_calf_joint_ids] = torch.tensor([-torch.pi, 0.0], device=scene.device)
+    joint_pos_limits[:, rear_calf_joint_ids] = torch.where(
+        parallel_abduction.reshape(articulation.num_instances, 1, 1),
+        torch.tensor([-torch.pi, 0.0], device=scene.device),
+        torch.tensor([0.0, torch.pi], device=scene.device),
+    )
+    articulation.data.joint_pos_limits[:] = joint_pos_limits
+    articulation.write_joint_position_limit_to_sim(joint_pos_limits)
+
+    init_root_state = articulation.data.default_root_state.clone()
+    init_root_state[:, :3] += scene.env_origins
     articulation.root_physx_view.set_masses(articulation.data.default_mass.sqrt(), torch.arange(articulation.num_instances))
-    articulation.write_root_pose_to_sim(root_state[:, :7])
-    articulation.write_joint_position_to_sim(default_joint_pos)
+
+    # # or alternatively, use the modify_articulation helper function
+    # QuadrupedBuilder.modify_articulation(articulation)
 
     # Now we are ready!
     print("[INFO]: Setup complete...")
 
     # Simulate physics
-    while simulation_app.is_running():
-        # perform step
-        articulation.set_joint_position_target(default_joint_pos)
+    for i in itertools.count():
+        if not simulation_app.is_running():
+            break
+        if i % 500 == 0:
+            print(f"[INFO]: Resetting root pose and joint position to simulation...")
+            articulation.write_root_pose_to_sim(init_root_state[:, :7])
+            articulation.write_joint_position_to_sim(articulation.data.default_joint_pos)
+        articulation.set_joint_position_target(articulation.data.default_joint_pos)
         scene.write_data_to_sim()
         sim.step()
         scene.update(sim.get_physics_dt())
-        print(contact_sensor.data.net_forces_w)
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ from isaaclab.utils.configclass import configclass
 from isaaclab.sim.utils import get_current_stage, find_matching_prim_paths
 from typing import Callable
 
-from metamorphosis.builder import QuadrupedBuilder
+from metamorphosis.builder import QuadrupedBuilder, QuadrupedParam
 
 
 def spawn(
@@ -71,3 +71,9 @@ class ProceduralQuadrupedCfg(SpawnerCfg):
 
     calf_length_ratio: tuple[float, float] = (0.9, 1.0)
     """Range for the calf length ratio."""
+
+    parallel_abduction: float = 0.5
+    """Probability of using parallel abduction/adduction configuration."""
+
+
+__all__ = ["ProceduralQuadrupedCfg", "QuadrupedBuilder", "QuadrupedParam"]
