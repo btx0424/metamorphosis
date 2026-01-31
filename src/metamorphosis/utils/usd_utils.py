@@ -40,6 +40,29 @@ def create_capsule(stage: Usd.Stage, path: str, radius: float, fromto: np.ndarra
     return capsule
 
 
+def create_cylinder(stage: Usd.Stage, path: str, radius: float, height: float, quat: np.ndarray = None):
+    """Create a cylinder geometry in USD.
+    
+    Args:
+        stage: USD stage
+        path: Path for the cylinder prim
+        radius: Cylinder radius
+        height: Cylinder height
+        quat: Quaternion for orientation [w, x, y, z], if None uses identity
+    """
+    cylinder = UsdGeom.Cylinder.Define(stage, path)
+    add_default_transform_(cylinder.GetPrim())
+    cylinder.CreateAxisAttr("Z")  # Default axis
+    cylinder.CreateRadiusAttr(radius)
+    cylinder.CreateHeightAttr(height)
+    
+    # Apply orientation if provided
+    if quat is not None:
+        cylinder.GetPrim().GetAttribute("xformOp:orient").Set(Gf.Quatf(*quat))
+    
+    return cylinder
+
+
 def create_fixed_joint(stage: Usd.Stage, path: str, body_0: Usd.Prim, body_1: Usd.Prim):
     joint = UsdPhysics.FixedJoint.Define(stage, path)
     joint.CreateBody0Rel().SetTargets([body_0.GetPath()])
@@ -112,6 +135,10 @@ def from_mjspec(stage: Usd.Stage, prim_path: str, spec: mujoco.MjSpec) -> Usd.Pr
                         sphere = UsdGeom.Sphere.Define(stage, geom_path)
                         add_default_transform_(sphere.GetPrim())
                         sphere.CreateRadiusAttr(geom.size[0])
+                    case mujoco.mjtGeom.mjGEOM_CYLINDER:
+                        # Extract quaternion if provided, otherwise use None
+                        quat = np.array(geom.quat) if hasattr(geom, 'quat') and geom.quat is not None else None
+                        cylinder = create_cylinder(stage, geom_path, geom.size[0], geom.size[1] * 2, quat)
                     case _:
                         raise ValueError(f"Unsupported geometry type: {geom.type}")
             add_default_transform_(xform_prim)
