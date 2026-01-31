@@ -1,10 +1,16 @@
+from __future__ import annotations
+
+import torch
 import mujoco
 import numpy as np
 import random
 
-from typing import NamedTuple, Callable
+from typing import NamedTuple, Callable, TYPE_CHECKING
 from metamorphosis.builder.base import BuilderBase
 from metamorphosis.utils.mjs_utils import add_capsule_geom_
+
+if TYPE_CHECKING:
+    from isaaclab.assets import Articulation
 
 
 class QuadrupedParam(NamedTuple):
@@ -14,6 +20,7 @@ class QuadrupedParam(NamedTuple):
     thigh_length: float
     calf_length: float
     thigh_radius: float
+    parallel_abduction: bool
 
 
 class QuadrupedBuilder(BuilderBase):
@@ -38,6 +45,7 @@ class QuadrupedBuilder(BuilderBase):
         base_height_range: Tuple of (min, max) for base body height in meters.
         leg_length_range: Tuple of (min, max) for leg length as a ratio of base_length.
         calf_length_ratio: Tuple of (min, max) for calf length as a ratio of thigh_length.
+        parallel_abduction: Whether to use parallel abduction/adduction (Unitree Go2 and MIT Cheetah) or opposed (Anymal) configuration.
         valid_filter: Optional callable to filter valid parameter combinations.
     
     Example:
@@ -56,6 +64,7 @@ class QuadrupedBuilder(BuilderBase):
         base_height_range: tuple[float, float] = (0.15, 0.25),
         leg_length_range: tuple[float, float] = (0.4, 0.8),
         calf_length_ratio: tuple[float, float] = (0.9, 1.0),
+        parallel_abduction: float = 0.5,
         valid_filter: Callable[[QuadrupedParam], bool] = lambda _: True,
     ):
         super().__init__()
@@ -64,6 +73,7 @@ class QuadrupedBuilder(BuilderBase):
         self.base_height_range = base_height_range
         self.leg_length_range = leg_length_range
         self.calf_length_ratio = calf_length_ratio
+        self.parallel_abduction = parallel_abduction
         self.valid_filter = valid_filter
     
     def sample_params(self, seed: int=-1):
@@ -78,6 +88,7 @@ class QuadrupedBuilder(BuilderBase):
             thigh_length = base_length * random.uniform(*self.leg_length_range)
             calf_length = thigh_length * random.uniform(*self.calf_length_ratio)
             thigh_radius = random.uniform(0.03, 0.05)
+            parallel_abduction = random.random() < self.parallel_abduction
             param = QuadrupedParam(
                 base_length=base_length,
                 base_width=base_width,
@@ -85,6 +96,7 @@ class QuadrupedBuilder(BuilderBase):
                 thigh_length=thigh_length,
                 calf_length=calf_length,
                 thigh_radius=thigh_radius,
+                parallel_abduction=parallel_abduction,
             )
             if self.valid_filter(param):
                 break
@@ -132,7 +144,7 @@ class QuadrupedBuilder(BuilderBase):
             calf_body.mass = 1.0
             calf_body.inertia = [1.0, 1.0, 1.0]
             joint = calf_body.add_joint(name=f"{name}_calf_joint", type=mujoco.mjtJoint.mjJNT_HINGE, axis=[0, 1, 0])
-            joint.range = [-np.pi, 0]
+            joint.range = [-np.pi, np.pi]
             add_capsule_geom_(calf_body, radius=calf_radius, fromto=[0, 0, 0, 0, 0, -param.calf_length])
 
             feet_body = calf_body.add_body(name=f"{name}_foot")
@@ -143,6 +155,49 @@ class QuadrupedBuilder(BuilderBase):
             feet_geom.size = [foot_radius, 0., 0.]
 
         return spec
+    
+    @classmethod
+    def modify_articulation(cls, articulation: Articulation):
+        """
+        Modify the articulation's default joint positions and joint position limits
+        based on the parallel_abduction flag.
+
+        Args:
+            articulation: The articulation to modify.
+        """
+        builder: QuadrupedBuilder = cls.get_instance()
+        device = articulation.device
+        parallel_abduction = torch.tensor(
+            [p.parallel_abduction for p in builder.params],
+            device=device,
+        )
+        front_thigh_joint_ids = articulation.find_joints("F[L,R]_thigh_joint")[0]
+        front_calf_joint_ids = articulation.find_joints("F[L,R]_calf_joint")[0]
+        rear_thigh_joint_ids = articulation.find_joints("R[L,R]_thigh_joint")[0]
+        rear_calf_joint_ids = articulation.find_joints("R[L,R]_calf_joint")[0]
+
+        default_joint_pos = articulation.data.default_joint_pos.clone()
+        default_joint_pos[:, rear_thigh_joint_ids] = torch.where(
+            parallel_abduction.reshape(articulation.num_instances, 1),
+            default_joint_pos[:, front_thigh_joint_ids],
+            -default_joint_pos[:, front_thigh_joint_ids],
+        )
+        default_joint_pos[:, rear_calf_joint_ids] = torch.where(
+            parallel_abduction.reshape(articulation.num_instances, 1),
+            default_joint_pos[:, front_calf_joint_ids],
+            -default_joint_pos[:, front_calf_joint_ids],
+        )
+        articulation.data.default_joint_pos[:] = default_joint_pos
+
+        joint_pos_limits = articulation.data.joint_pos_limits.clone()
+        joint_pos_limits[:, front_calf_joint_ids] = torch.tensor([-torch.pi, 0.0], device=device)
+        joint_pos_limits[:, rear_calf_joint_ids] = torch.where(
+            parallel_abduction.reshape(articulation.num_instances, 1, 1),
+            torch.tensor([-torch.pi, 0.0], device=device),
+            torch.tensor([0.0, torch.pi], device=device),
+        )
+        articulation.data.joint_pos_limits[:] = joint_pos_limits
+        articulation.write_joint_position_limit_to_sim(joint_pos_limits)
 
 
 if __name__ == "__main__":

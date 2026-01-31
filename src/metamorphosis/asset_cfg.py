@@ -4,7 +4,11 @@ from isaaclab.utils.configclass import configclass
 from isaaclab.sim.utils import get_current_stage, find_matching_prim_paths
 from typing import Callable
 
+<<<<<<< HEAD
 from metamorphosis.builder import QuadrupedBuilder, BipedBuilder, QuadWheelBuilder
+=======
+from metamorphosis.builder import QuadrupedBuilder, QuadrupedParam
+>>>>>>> upstream/dev
 
 
 def spawn(
@@ -72,6 +76,7 @@ class ProceduralQuadrupedCfg(SpawnerCfg):
     calf_length_ratio: tuple[float, float] = (0.9, 1.0)
     """Range for the calf length ratio."""
 
+<<<<<<< HEAD
 
 def spawn_biped(
     prim_path: str,
@@ -239,3 +244,10 @@ class ProceduralQuadWheelCfg(SpawnerCfg):
 
     wheel_width_range: tuple[float, float] = (0.03, 0.06)
     """Range for the wheel width in meters."""
+=======
+    parallel_abduction: float = 0.5
+    """Probability of using parallel abduction/adduction configuration."""
+
+
+__all__ = ["ProceduralQuadrupedCfg", "QuadrupedBuilder", "QuadrupedParam"]
+>>>>>>> upstream/dev
